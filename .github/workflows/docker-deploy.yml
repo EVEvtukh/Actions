@@ -1,0 +1,124 @@
+# CI: собрать Docker-образ и выложить его в GitHub Container Registry.
+# CD: по SSH подтянуть образ на сервер и перезапустить контейнер.
+#
+# Требуемые secrets (Settings -> Secrets and variables -> Actions):
+#   DEPLOY_HOST      адрес сервера (IP или домен)
+#   DEPLOY_USER      пользователь SSH
+#   DEPLOY_SSH_KEY   приватный ключ (полностью, включая BEGIN/END)
+#   DEPLOY_PORT      порт SSH (необязательно, по умолчанию 22)
+#   GHCR_PULL_TOKEN  PAT с read:packages (нужен, только если пакет приватный)
+name: docker-build-deploy
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+# Не даём двум запускам одновременно перезаписывать один контейнер.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR принимает только нижний регистр, поэтому имя считаем из репозитория
+  # и приводим к строчным буквам.
+  IMAGE_NAME: server-time-api
+
+jobs:
+  build:
+    name: Сборка и публикация образа
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Имя и тег образа
+        id: meta
+        run: |
+          repo="$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          image="${REGISTRY}/${repo}/${IMAGE_NAME}"
+          tag="sha-$(git rev-parse --short=7 HEAD)"
+          echo "image=${image}:${tag}" >> "$GITHUB_OUTPUT"
+          echo "tags=${image}:${tag},${image}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Логин в GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Сборка и push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Сводка
+        run: echo "Опубликован образ \`${{ steps.meta.outputs.image }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Деплой на сервер
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Перезапуск контейнера по SSH
+        uses: appleboy/ssh-action@v1.2.2
+        env:
+          IMAGE: ${{ needs.build.outputs.image }}
+          CONTAINER: server-time-api
+          APP_PORT: "8000"
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: IMAGE,CONTAINER,APP_PORT,GHCR_USER,GHCR_PULL_TOKEN
+          script: |
+            set -e
+            echo "Деплоим ${IMAGE}"
+
+            # Токен пустой для публичного пакета - логин пропускаем.
+            if [ -n "$GHCR_PULL_TOKEN" ]; then
+              echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            fi
+
+            docker pull "$IMAGE"
+
+            docker stop "$CONTAINER" 2>/dev/null || true
+            docker rm "$CONTAINER" 2>/dev/null || true
+            docker run -d \
+              --name "$CONTAINER" \
+              --restart unless-stopped \
+              -p "${APP_PORT}:8000" \
+              "$IMAGE"
+
+            # Проверка /health: без неё job считается успешным даже с упавшим контейнером.
+            for i in 1 2 3 4 5; do
+              if curl -fsS "http://127.0.0.1:${APP_PORT}/health"; then
+                echo
+                echo "Контейнер ${CONTAINER} отвечает /health, деплой готов"
+                exit 0
+              fi
+              sleep 3
+            done
+
+            echo "Сервис не поднялся, последние логи:"
+            docker logs --tail 100 "$CONTAINER"
+            exit 1
