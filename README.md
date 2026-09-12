@@ -23,6 +23,21 @@ python -m venv .venv
 
 Интерактивная документация (Swagger UI): `http://127.0.0.1:8000/docs`.
 
+## Сборка в Docker
+
+```powershell
+docker build -t server-time-api .
+docker run --rm -p 8000:8000 server-time-api
+```
+
+Если порт 8000 на хосте уже занят, пробросьте другой:
+
+```powershell
+docker run --rm -p 8124:8000 server-time-api
+```
+
+Образ собран на `python:3.12-slim`, приложение запускается под непривилегированным пользователем `appuser`.
+
 ## Эндпоинты
 
 ### `GET /time`
@@ -72,12 +87,14 @@ curl http://127.0.0.1:8000/time
 ```
 .
 ├── main.py           # Приложение FastAPI и обработчики эндпоинтов
-└── requirements.txt  # Зависимости
+├── requirements.txt  # Зависимости
+├── Dockerfile        # Сборка образа
+└── .dockerignore     # Исключения для сборки
 ```
 
 ## Зависимости
 
-| Пакет              | Версия  |
-| ------------------ | ------- |
-| fastapi            | 0.141.1 |
-| uvicorn[standard]  | 0.52.4  |
+Список без фиксации версий:
+
+- fastapi
+- uvicorn[standard]
