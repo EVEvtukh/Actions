@@ -38,6 +38,25 @@ docker run --rm -p 8124:8000 server-time-api
 
 Образ собран на `python:3.12-slim`, приложение запускается под непривилегированным пользователем `appuser`.
 
+## CI/CD
+
+Workflow `.github/workflows/docker-deploy.yml` запускается при пуше в `main`/`master` и вручную:
+
+1. **build** — собирает образ и публикует его в GHCR под тегами `sha-<commit>` и `latest`;
+2. **deploy** — по SSH забирает образ с коммита сборки, перезапускает контейнер и проверяет `GET /health`.
+
+Secrets, которые нужно задать в репозитории (Settings -> Secrets and variables -> Actions):
+
+| Secret            | Назначение                                              |
+| ----------------- | ------------------------------------------------------- |
+| `DEPLOY_HOST`     | адрес сервера                                           |
+| `DEPLOY_USER`     | пользователь SSH                                        |
+| `DEPLOY_SSH_KEY`  | приватный SSH-ключ целиком                              |
+| `DEPLOY_PORT`     | порт SSH, по умолчанию 22                               |
+| `GHCR_PULL_TOKEN` | PAT с `read:packages`, нужен только для приватного пакета |
+
+Имя образа — `ghcr.io/<владелец>/actions/server-time-api` (регистр принудительно нижний, как требует GHCR). На сервере нужны `docker` и `curl`.
+
 ## Эндпоинты
 
 ### `GET /time`
@@ -185,7 +204,8 @@ curl http://127.0.0.1:8000/date/eu
 ├── main.py           # Приложение FastAPI и обработчики эндпоинтов
 ├── requirements.txt  # Зависимости
 ├── Dockerfile        # Сборка образа
-└── .dockerignore     # Исключения для сборки
+├── .dockerignore     # Исключения для сборки
+└── .github/workflows/docker-deploy.yml  # CI/CD: сборка, публикация, деплой
 ```
 
 ## Зависимости
