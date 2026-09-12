@@ -81,7 +81,7 @@ jobs:
         env:
           IMAGE: ${{ needs.build.outputs.image }}
           CONTAINER: server-time-api
-          APP_PORT: "8000"
+          APP_PORT: "8001"
           GHCR_USER: ${{ github.actor }}
           GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
         with:
